@@ -51,11 +51,11 @@ struct Thread {
 unsafe impl std::marker::Send for Thread {} // for Thread::tt and Thread::ehash
 
 struct ThreadPoolBase {
-    threads: Vec<Arc<std::sync::Mutex<Thread>>>,
+    threads: Vec<Arc<Mutex<Thread>>>,
 }
 
 pub struct ThreadPool {
-    thread_pool_base: Arc<std::sync::Mutex<ThreadPoolBase>>,
+    thread_pool_base: Arc<Mutex<ThreadPoolBase>>,
     nodess: Vec<Arc<AtomicI64>>,
     pub book: Option<Book>,
     timeman: Arc<Mutex<TimeManagement>>,
@@ -1417,7 +1417,7 @@ impl Thread {
 impl ThreadPool {
     pub fn new() -> ThreadPool {
         ThreadPool {
-            thread_pool_base: Arc::new(std::sync::Mutex::new(ThreadPoolBase { threads: vec![] })),
+            thread_pool_base: Arc::new(Mutex::new(ThreadPoolBase { threads: vec![] })),
             nodess: vec![],
             book: None,
             timeman: Arc::new(Mutex::new(TimeManagement::new())),
@@ -1433,13 +1433,13 @@ impl ThreadPool {
         }
     }
     pub fn clear(&mut self) {
-        for th in self.thread_pool_base.lock().unwrap().threads.iter() {
-            th.lock().unwrap().clear();
+        for th in (*self.thread_pool_base.lock()).threads.iter() {
+            (*th.lock()).clear();
         }
         *self.last_best_root_move.lock() = None;
 
-        let thread_pool_base = self.thread_pool_base.lock().unwrap();
-        let mut main_thread = thread_pool_base.threads[0].lock().unwrap();
+        let thread_pool_base = &mut *self.thread_pool_base.lock();
+        let mut main_thread = &mut *thread_pool_base.threads[0].lock();
         main_thread.calls_count = 0;
         *main_thread.previous_score.lock() = Value::INFINITE;
         main_thread.previous_time_reduction = 1.0;
@@ -1447,19 +1447,19 @@ impl ThreadPool {
     pub fn set(&mut self, requested: usize, tt: &mut TranspositionTable, ehash: &mut EvalHash) {
         if let Some(handle) = self.handle.take() {
             handle.join().unwrap();
-            self.thread_pool_base.lock().unwrap().threads.clear();
+            (*self.thread_pool_base.lock()).threads.clear();
             self.nodess.clear();
         }
-        self.thread_pool_base.lock().unwrap().threads.clear();
+        (*self.thread_pool_base.lock()).threads.clear();
         self.nodess = (0..requested)
             .map(|_| Arc::new(AtomicI64::new(0)))
             .collect();
         self.best_move_changess = (0..requested)
             .map(|_| Arc::new(AtomicU64::new(0)))
             .collect();
-        self.thread_pool_base.lock().unwrap().threads = (0..requested)
+        (*self.thread_pool_base.lock()).threads = (0..requested)
             .map(|i| {
-                Arc::new(std::sync::Mutex::new(Thread {
+                Arc::new(Mutex::new(Thread {
                     idx: i,
                     pv_idx: 0,
                     sel_depth: 0,
@@ -1493,10 +1493,7 @@ impl ThreadPool {
             })
             .collect();
         // Main thread has other thread's nodes.
-        self.thread_pool_base.lock().unwrap().threads[0]
-            .lock()
-            .unwrap()
-            .nodess = self.nodess.clone();
+        (*(*self.thread_pool_base.lock()).threads[0].lock()).nodess = self.nodess.clone();
     }
     pub fn start_thinking(
         &mut self,
@@ -1565,9 +1562,7 @@ impl ThreadPool {
         let last_best_root_move_cloned = self.last_best_root_move.clone();
         self.handle = Some(std::thread::spawn(move || {
             let mut v = vec![];
-            for (i, thread) in thread_pool_base_cloned
-                .lock()
-                .unwrap()
+            for (i, thread) in (*thread_pool_base_cloned.lock())
                 .threads
                 .iter_mut()
                 .enumerate()
@@ -1583,7 +1578,7 @@ impl ThreadPool {
                 let usi_options_cloned = usi_options_cloned.clone();
                 let timeman_cloned = timeman_cloned.clone();
                 let worker = move || {
-                    let mut th = thread_cloned.lock().unwrap();
+                    let mut th = &mut *thread_cloned.lock();
                     th.best_move_changes.store(0, Ordering::Relaxed);
                     th.limits = limits_cloned;
                     th.nodes = nodes_cloned;
@@ -1618,80 +1613,68 @@ impl ThreadPool {
             );
             let best_thread = if multi_pv == 1 && limits.depth.is_none() && !root_moves.is_empty() {
                 let mut votes = std::collections::BTreeMap::new();
-                let min_score: Value = thread_pool_base_cloned
-                    .lock()
-                    .unwrap()
+                let min_score: Value = (*thread_pool_base_cloned.lock())
                     .threads
                     .iter()
-                    .map(|x| x.lock().unwrap().root_moves[0].score)
+                    .map(|x| (*x.lock()).root_moves[0].score)
                     .min()
                     .unwrap();
 
-                for th in thread_pool_base_cloned.lock().unwrap().threads.iter() {
-                    let th = th.lock().unwrap();
+                for th in (*thread_pool_base_cloned.lock()).threads.iter() {
+                    let th = &*th.lock();
                     *votes.entry(th.root_moves[0].pv[0].0.get()).or_insert(0) += i64::from(
                         (th.root_moves[0].score.0 - min_score.0 + 14) * th.completed_depth.0,
                     );
                 }
 
-                thread_pool_base_cloned
-                    .lock()
-                    .unwrap()
+                (*thread_pool_base_cloned.lock())
                     .threads
                     .iter()
                     // get first "max" score.
                     .min_by(|x, y| {
-                        let x_score = *votes
-                            .get(&x.lock().unwrap().root_moves[0].pv[0].0.get())
-                            .unwrap();
-                        let y_score = *votes
-                            .get(&y.lock().unwrap().root_moves[0].pv[0].0.get())
-                            .unwrap();
+                        let x_score = *votes.get(&(*x.lock()).root_moves[0].pv[0].0.get()).unwrap();
+                        let y_score = *votes.get(&(*y.lock()).root_moves[0].pv[0].0.get()).unwrap();
                         y_score.cmp(&x_score)
                     })
                     .unwrap()
                     .clone()
             } else {
-                thread_pool_base_cloned.lock().unwrap().threads[0].clone()
+                (*thread_pool_base_cloned.lock()).threads[0].clone()
             };
 
-            *previous_score_cloned.lock() = best_thread.lock().unwrap().root_moves[0].score;
+            *previous_score_cloned.lock() = (*best_thread.lock()).root_moves[0].score;
 
-            let nodes_searched = thread_pool_base_cloned.lock().unwrap().threads[0]
-                .lock()
-                .unwrap()
-                .nodes_searched();
-            if let Ok(best_thread) = best_thread.lock() {
-                if !hide_all_output_cloned.load(Ordering::Relaxed) {
-                    // Always send again PV info.
-                    println!(
-                        "{}",
-                        best_thread.pv_info_to_usi_string(
-                            nodes_searched,
-                            multi_pv,
-                            best_thread.completed_depth,
-                            -Value::INFINITE,
-                            Value::INFINITE,
-                            true,
-                        )
+            let nodes_searched =
+                (*(*thread_pool_base_cloned.lock()).threads[0].lock()).nodes_searched();
+            let best_thread = &*best_thread.lock();
+            if !hide_all_output_cloned.load(Ordering::Relaxed) {
+                // Always send again PV info.
+                println!(
+                    "{}",
+                    best_thread.pv_info_to_usi_string(
+                        nodes_searched,
+                        multi_pv,
+                        best_thread.completed_depth,
+                        -Value::INFINITE,
+                        Value::INFINITE,
+                        true,
+                    )
+                );
+                let mut s = format!(
+                    "bestmove {}",
+                    best_thread.root_moves[0].pv[0].to_usi_string(),
+                );
+                if usi_options_cloned.get_bool(UsiOptions::USI_PONDER)
+                    && best_thread.root_moves[0].pv.len() >= 2
+                {
+                    s += &format!(
+                        " ponder {}",
+                        best_thread.root_moves[0].pv[1].to_usi_string()
                     );
-                    let mut s = format!(
-                        "bestmove {}",
-                        best_thread.root_moves[0].pv[0].to_usi_string(),
-                    );
-                    if usi_options_cloned.get_bool(UsiOptions::USI_PONDER)
-                        && best_thread.root_moves[0].pv.len() >= 2
-                    {
-                        s += &format!(
-                            " ponder {}",
-                            best_thread.root_moves[0].pv[1].to_usi_string()
-                        );
-                    }
-                    println!("{}", s);
                 }
+                println!("{}", s);
             }
-            *last_best_root_move_cloned.lock() =
-                Some(best_thread.lock().unwrap().root_moves[0].clone());
+            *last_best_root_move_cloned.lock() = Some(best_thread.root_moves[0].clone());
         }));
     }
     pub fn wait_for_search_finished(&mut self) {
