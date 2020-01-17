@@ -10,8 +10,9 @@ use crate::timeman::*;
 use crate::tt::*;
 use crate::types::*;
 use crate::usioption::*;
+use spin::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 struct Thread {
     idx: usize,
@@ -50,11 +51,11 @@ struct Thread {
 unsafe impl std::marker::Send for Thread {} // for Thread::tt and Thread::ehash
 
 struct ThreadPoolBase {
-    threads: Vec<Arc<Mutex<Thread>>>,
+    threads: Vec<Arc<std::sync::Mutex<Thread>>>,
 }
 
 pub struct ThreadPool {
-    thread_pool_base: Arc<Mutex<ThreadPoolBase>>,
+    thread_pool_base: Arc<std::sync::Mutex<ThreadPoolBase>>,
     nodess: Vec<Arc<AtomicI64>>,
     pub book: Option<Book>,
     timeman: Arc<Mutex<TimeManagement>>,
@@ -152,7 +153,7 @@ impl Thread {
                     if self.is_main()
                         && multi_pv == 1
                         && (best_value <= alpha || beta <= best_value)
-                        && self.timeman.lock().unwrap().elapsed() > 3000
+                        && (*self.timeman.lock()).elapsed() > 3000
                         && (self.root_depth < Depth(10)
                             || last_info_time.is_none()
                             || last_info_time.unwrap().elapsed().as_millis() > 200)
@@ -196,7 +197,7 @@ impl Thread {
                 if self.is_main()
                     && (self.stop.load(Ordering::Relaxed)
                         || self.pv_idx + 1 == multi_pv
-                        || self.timeman.lock().unwrap().elapsed() > 3000)
+                        || (*self.timeman.lock()).elapsed() > 3000)
                     && (self.root_depth < Depth(10)
                         || last_info_time.is_none()
                         || last_info_time.unwrap().elapsed().as_millis() > 200)
@@ -247,9 +248,8 @@ impl Thread {
                 && !self.stop.load(Ordering::Relaxed)
                 && !self.stop_on_ponderhit.load(Ordering::Relaxed)
             {
-                let falling_eval = 314.0
-                    + 9.0 * f64::from((*self.previous_score.lock().unwrap() - best_value).0)
-                        / 581.0;
+                let falling_eval =
+                    314.0 + 9.0 * f64::from((*self.previous_score.lock() - best_value).0) / 581.0;
                 let falling_eval = num::clamp(falling_eval, 0.5, 1.5);
                 time_reduction =
                     if last_best_move_depth.0 + 10 * Depth::ONE_PLY.0 < self.completed_depth.0 {
@@ -265,7 +265,7 @@ impl Thread {
                 let best_move_instability =
                     1.0 + total_best_move_changes / self.best_move_changess.len() as f64;
                 if self.root_moves.len() == 1 || {
-                    let timeman = self.timeman.lock().unwrap();
+                    let timeman = &*self.timeman.lock();
                     timeman.elapsed()
                         > (timeman.optimum_millis() as f64
                             * falling_eval
@@ -1312,7 +1312,7 @@ impl Thread {
         let elapsed = self.limits.start_time.unwrap().elapsed();
 
         if (self.limits.use_time_management()
-            && (elapsed.as_millis() as i64 > self.timeman.lock().unwrap().maximum_millis() - 10
+            && (elapsed.as_millis() as i64 > (*self.timeman.lock()).maximum_millis() - 10
                 || self.stop_on_ponderhit.load(Ordering::Relaxed)))
             || (self.limits.movetime.is_some() && elapsed >= self.limits.movetime.unwrap())
             || (self.limits.nodes.is_some()
@@ -1417,7 +1417,7 @@ impl Thread {
 impl ThreadPool {
     pub fn new() -> ThreadPool {
         ThreadPool {
-            thread_pool_base: Arc::new(Mutex::new(ThreadPoolBase { threads: vec![] })),
+            thread_pool_base: Arc::new(std::sync::Mutex::new(ThreadPoolBase { threads: vec![] })),
             nodess: vec![],
             book: None,
             timeman: Arc::new(Mutex::new(TimeManagement::new())),
@@ -1436,12 +1436,12 @@ impl ThreadPool {
         for th in self.thread_pool_base.lock().unwrap().threads.iter() {
             th.lock().unwrap().clear();
         }
-        *self.last_best_root_move.lock().unwrap() = None;
+        *self.last_best_root_move.lock() = None;
 
         let thread_pool_base = self.thread_pool_base.lock().unwrap();
         let mut main_thread = thread_pool_base.threads[0].lock().unwrap();
         main_thread.calls_count = 0;
-        *main_thread.previous_score.lock().unwrap() = Value::INFINITE;
+        *main_thread.previous_score.lock() = Value::INFINITE;
         main_thread.previous_time_reduction = 1.0;
     }
     pub fn set(&mut self, requested: usize, tt: &mut TranspositionTable, ehash: &mut EvalHash) {
@@ -1459,7 +1459,7 @@ impl ThreadPool {
             .collect();
         self.thread_pool_base.lock().unwrap().threads = (0..requested)
             .map(|i| {
-                Arc::new(Mutex::new(Thread {
+                Arc::new(std::sync::Mutex::new(Thread {
                     idx: i,
                     pv_idx: 0,
                     sel_depth: 0,
@@ -1518,10 +1518,7 @@ impl ThreadPool {
         self.ponder.store(ponder_mode, Ordering::Relaxed);
         self.hide_all_output
             .store(hide_all_output, Ordering::Relaxed);
-        self.timeman
-            .lock()
-            .unwrap()
-            .init(usi_options, &mut limits, pos.side_to_move(), pos.ply());
+        (*self.timeman.lock()).init(usi_options, &mut limits, pos.side_to_move(), pos.ply());
         tt.new_search();
         self.limits = limits.clone();
         let root_moves = {
@@ -1552,7 +1549,7 @@ impl ThreadPool {
             if !self.hide_all_output.load(Ordering::Relaxed) {
                 println!("bestmove resign");
             }
-            *self.last_best_root_move.lock().unwrap() = Some(RootMove::new(Move::RESIGN));
+            *self.last_best_root_move.lock() = Some(RootMove::new(Move::RESIGN));
             return;
         }
         let dummy_nodes = Arc::new(AtomicI64::new(0)); // This isn't used.
@@ -1658,8 +1655,7 @@ impl ThreadPool {
                 thread_pool_base_cloned.lock().unwrap().threads[0].clone()
             };
 
-            *previous_score_cloned.lock().unwrap() =
-                best_thread.lock().unwrap().root_moves[0].score;
+            *previous_score_cloned.lock() = best_thread.lock().unwrap().root_moves[0].score;
 
             let nodes_searched = thread_pool_base_cloned.lock().unwrap().threads[0]
                 .lock()
@@ -1694,7 +1690,7 @@ impl ThreadPool {
                     println!("{}", s);
                 }
             }
-            *last_best_root_move_cloned.lock().unwrap() =
+            *last_best_root_move_cloned.lock() =
                 Some(best_thread.lock().unwrap().root_moves[0].clone());
         }));
     }

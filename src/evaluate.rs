@@ -231,7 +231,7 @@ pub struct Evaluator {
 impl Evaluator {
     fn load_kpp(&mut self, path: &str) -> std::io::Result<()> {
         let mut file = std::fs::File::open(path)?;
-        let ptr = BUFFER_KPP.lock().unwrap().as_mut_ptr() as *mut u8;
+        let ptr = (*BUFFER_KPP.lock()).as_mut_ptr() as *mut u8;
         let slice = unsafe {
             std::slice::from_raw_parts_mut(
                 ptr,
@@ -239,13 +239,13 @@ impl Evaluator {
             )
         };
         file.read_exact(slice)?;
-        self.kpp = BUFFER_KPP.lock().unwrap().as_mut_ptr()
+        self.kpp = (*BUFFER_KPP.lock()).as_mut_ptr()
             as *mut [[[[i16; 2]; EvalIndex::FE_END.0]; EvalIndex::FE_END.0]; Square::NUM];
         Ok(())
     }
     fn load_kkp(&mut self, path: &str) -> std::io::Result<()> {
         let mut file = std::fs::File::open(path)?;
-        let ptr = BUFFER_KKP.lock().unwrap().as_mut_ptr() as *mut u8;
+        let ptr = (*BUFFER_KKP.lock()).as_mut_ptr() as *mut u8;
         let slice = unsafe {
             std::slice::from_raw_parts_mut(
                 ptr,
@@ -253,7 +253,7 @@ impl Evaluator {
             )
         };
         file.read_exact(slice)?;
-        self.kkp = BUFFER_KKP.lock().unwrap().as_mut_ptr()
+        self.kkp = (*BUFFER_KKP.lock()).as_mut_ptr()
             as *mut [[[[i16; 2]; EvalIndex::FE_END.0]; Square::NUM]; Square::NUM];
         Ok(())
     }
@@ -607,12 +607,12 @@ impl Evaluator {
 }
 
 lazy_static! {
-    static ref BUFFER_KPP: std::sync::Mutex<Vec<i16>> = std::sync::Mutex::new(
-        Vec::<i16>::with_capacity(2 * EvalIndex::FE_END.0 * EvalIndex::FE_END.0 * Square::NUM)
-    );
-    static ref BUFFER_KKP: std::sync::Mutex<Vec<i16>> = std::sync::Mutex::new(
-        Vec::<i16>::with_capacity(2 * EvalIndex::FE_END.0 * Square::NUM * Square::NUM)
-    );
+    static ref BUFFER_KPP: spin::Mutex<Vec<i16>> = spin::Mutex::new(Vec::<i16>::with_capacity(
+        2 * EvalIndex::FE_END.0 * EvalIndex::FE_END.0 * Square::NUM
+    ));
+    static ref BUFFER_KKP: spin::Mutex<Vec<i16>> = spin::Mutex::new(Vec::<i16>::with_capacity(
+        2 * EvalIndex::FE_END.0 * Square::NUM * Square::NUM
+    ));
 }
 
 pub static mut EVALUATOR: Evaluator = Evaluator {

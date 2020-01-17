@@ -93,7 +93,9 @@ pub fn generate_teachers(args: &[&str]) {
     if args.len() != 5 {
         eprintln!("Invalid generate_teachers command.");
         eprintln!("expected:");
-        eprintln!(r#"generate_teachers <output_file_path> <root_positions_file_path> <search_depth> <num_threads> <num_teachers>"#);
+        eprintln!(
+            r#"generate_teachers <output_file_path> <root_positions_file_path> <search_depth> <num_threads> <num_teachers>"#
+        );
         return;
     }
     let output = args[0];
@@ -101,7 +103,7 @@ pub fn generate_teachers(args: &[&str]) {
     let search_depth = args[2];
     let num_threads = args[3];
     let num_teachers = args[4];
-    let writer = std::sync::Arc::new(std::sync::Mutex::new(match TeacherWriter::new(output) {
+    let writer = std::sync::Arc::new(spin::Mutex::new(match TeacherWriter::new(output) {
         Ok(w) => w,
         Err(_) => {
             eprintln!(r#"Cannot create file "{}"."#, output);
@@ -225,7 +227,7 @@ pub fn generate_teachers(args: &[&str]) {
                         hide_all_output,
                     );
                     thread_pool.wait_for_search_finished();
-                    let rm = thread_pool.last_best_root_move.lock().unwrap();
+                    let rm = &*thread_pool.last_best_root_move.lock();
                     let rm = rm.as_ref().unwrap();
                     const RESIGN_THRESH: Value = Value(4000);
                     if rm.score.abs() <= RESIGN_THRESH {
@@ -264,7 +266,7 @@ pub fn generate_teachers(args: &[&str]) {
                     let gives_check = pos.gives_check(rm.pv[0]);
                     pos.do_move(rm.pv[0], gives_check);
                 }
-                writer.lock().unwrap().write(&hcpes);
+                (*writer.lock()).write(&hcpes);
             }
         };
         const STACK_SIZE: usize = 128 * 1024 * 1024;

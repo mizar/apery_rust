@@ -134,10 +134,7 @@ fn self_move(
                 hide_all_output,
             );
             thread_pool.wait_for_search_finished();
-            let m = thread_pool
-                .last_best_root_move
-                .lock()
-                .unwrap()
+            let m = (*thread_pool.last_best_root_move.lock())
                 .as_ref()
                 .unwrap()
                 .pv[0];
